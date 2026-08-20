@@ -1,0 +1,4 @@
+- **Zero-Hallucination Stopping Rules**: Halts autonomously upon hard payment declines (`INSUFFICIENT_FUNDS`, `CARD_BLOCKED`) or when retries exceed limits (>= 2).
+- **Compliant Escalation Gating**: Automatically flags high-value invoices (>= Rs 25,000) or VIP enterprise accounts for human operator review.
+- **Bounded Dynamic Incentives**: Caps cart-abandonment nudges strictly below 10% (max Rs 500 discount) to prevent margin leakage.
+- **Razorpay API Integration**: Dynamically generates localized, contextual recovery payment links.
