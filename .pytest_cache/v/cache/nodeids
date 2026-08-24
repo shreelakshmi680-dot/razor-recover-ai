@@ -1,0 +1,17 @@
+[
+  "app/tests/test_adversarial.py::test_concurrent_batch_throughput",
+  "app/tests/test_adversarial.py::test_empty_corrupted_payload",
+  "app/tests/test_adversarial.py::test_enterprise_escalation_threshold",
+  "app/tests/test_adversarial.py::test_extreme_discount_percentage_attack",
+  "app/tests/test_adversarial.py::test_invalid_string_numbers",
+  "app/tests/test_adversarial.py::test_negative_amount_margin_handling",
+  "app/tests/test_adversarial.py::test_opt_out_compliance_rule",
+  "app/tests/test_adversarial.py::test_sql_injection_in_customer_name",
+  "app/tests/test_dashboard.py::test_batch_benchmark_button_flow",
+  "app/tests/test_dashboard.py::test_dashboard_renders_without_crashing",
+  "app/tests/test_dashboard.py::test_trigger_recovery_button_flow",
+  "app/tests/test_guardrails.py::test_discount_margin_guardrail_cap",
+  "app/tests/test_guardrails.py::test_hard_decline_stopping_rule",
+  "app/tests/test_guardrails.py::test_high_value_enterprise_escalation",
+  "app/tests/test_guardrails.py::test_max_retries_exceeded_stopping_rule"
+]

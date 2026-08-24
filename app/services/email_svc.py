@@ -1,79 +1,83 @@
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+"""
+RazorRecover AI - SMTP Email Outreach Service
+Dispatches recovery links and customer nudges via secure SMTP.
+"""
+
 import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Force load .env from project root
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+env_path = ROOT_DIR / ".env"
+load_dotenv(dotenv_path=env_path, override=True)
 
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
-SMTP_EMAIL = os.getenv("SMTP_EMAIL", "")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 
-def send_recovery_email(to_email: str, customer_name: str, recovery_message: str, payment_link: str, amount_inr: float) -> tuple[bool, str]:
-    if not SMTP_EMAIL or not SMTP_PASSWORD:
-        return False, "SMTP credentials missing in .env"
+def send_recovery_email(to_email: str, customer_name: str, order_id: str, payment_link: str, message: str) -> bool:
+    """
+    Sends an automated recovery email that links directly to the in-app payment confirmation flow.
+    """
+    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com").strip()
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = (os.getenv("SMTP_USERNAME") or "shreelakshmi680@gmail.com").strip()
+    smtp_pass = (os.getenv("SMTP_PASSWORD") or "fsqdtmldirihwtvc").strip().replace(" ", "")
+
+    # Deep link to Tab 2 with query parameters for in-app checkout
+    checkout_url = f"http://localhost:8502/?order_id={order_id}&mode=checkout"
 
     try:
-        # If the payment link is a base64 data-URI, route the email button to a safe checkout URL
-        # because Gmail/Apple Mail block base64 URIs for security.
-        clickable_link = "https://rzp.io/l/demo-recover-pay" if payment_link.startswith("data:") else payment_link
-
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = "⚡ Action Required: Complete your payment — RazorRecover AI"
-        msg["From"] = f"RazorRecover AI <{SMTP_EMAIL}>"
+        msg["Subject"] = f"⚡ Action Required: Complete your order #{order_id}"
+        msg["From"] = f"RazorRecover <{smtp_user}>"
         msg["To"] = to_email
 
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <style>
-                body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F4F7FB; margin: 0; padding: 20px; }}
-                .container {{ background-color: #FFFFFF; max-width: 520px; margin: 0 auto; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.06); border-top: 4px solid #0D94FB; }}
-                .header {{ padding: 22px; background: #012652; color: #FFFFFF; text-align: center; }}
-                .content {{ padding: 26px; color: #334155; font-size: 15px; line-height: 1.6; }}
-                .box {{ background-color: #F8FAFC; border-left: 4px solid #0D94FB; padding: 14px 16px; border-radius: 6px; margin: 18px 0; color: #1E293B; font-size: 14.5px; }}
-                .amount-tag {{ text-align: center; font-size: 20px; font-weight: 800; color: #012652; margin: 18px 0 10px 0; }}
-                .btn-box {{ text-align: center; margin: 24px 0; }}
-                .btn {{ background-color: #02A95C; color: #FFFFFF !important; text-decoration: none; padding: 13px 28px; border-radius: 8px; font-weight: 700; font-size: 15px; display: inline-block; }}
-                .footer {{ background-color: #F8FAFC; padding: 14px; text-align: center; font-size: 12px; color: #94A3B8; border-top: 1px solid #E2E8F0; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h2 style="margin: 0; font-size: 20px; color: #FFFFFF;">⚡ RazorRecover AI Interventions</h2>
-                </div>
-                <div class="content">
-                    <p style="margin-top: 0;">Hi <strong>{customer_name}</strong>,</p>
-                    <div class="box">
-                        {recovery_message}
-                    </div>
-                    <div class="amount-tag">
-                        Payable Amount: ₹{amount_inr:,.2f}
-                    </div>
-                    <div class="btn-box">
-                        <a href="{clickable_link}" class="btn">💳 Complete Recovery Payment</a>
-                    </div>
-                </div>
-                <div class="footer">
-                    🔒 Secured by RazorRecover AI &bull; Track 03 Buildathon Engine
-                </div>
-            </div>
-        </body>
-        </html>
-        """
+        html_body = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>RazorRecover Payment</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 20px;">
+    <div style="max-width: 560px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+        
+        <div style="display: flex; align-items: center; margin-bottom: 20px;">
+            <h2 style="color: #0284c7; margin: 0; font-size: 22px; font-weight: 700;">⚡ RazorRecover Alert</h2>
+        </div>
+        
+        <p style="font-size: 16px; color: #334155; line-height: 1.6; margin: 0 0 24px 0;">
+            {message}
+        </p>
+        
+        <div style="text-align: center; margin: 32px 0;">
+            <a href="{checkout_url}" target="_blank" rel="noopener noreferrer" style="background-color: #0284c7; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; display: inline-block; box-shadow: 0 4px 6px -1px rgba(2, 132, 199, 0.3);">
+                💳 Complete Secure Payment
+            </a>
+        </div>
+        
+        <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 24px 0;">
+        
+        <p style="font-size: 12px; color: #94a3b8; margin: 0; line-height: 1.5;">
+            Order Reference: <strong>#{order_id}</strong><br>
+            Protected by <strong>RazorRecover Autonomous Guardrail Engine</strong>.
+        </p>
+    </div>
+</body>
+</html>
+"""
 
-        msg.attach(MIMEText(html_content, "html"))
+        msg.attach(MIMEText(html_body, "html"))
 
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
-            server.login(SMTP_EMAIL, SMTP_PASSWORD)
-            server.sendmail(SMTP_EMAIL, to_email, msg.as_string())
+        with smtplib.SMTP(smtp_server, smtp_port, timeout=10) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(smtp_user, to_email, msg.as_string())
 
-        return True, "Email sent successfully"
+        print(f"[SMTP Success] Email dispatched to {to_email} pointing to: {checkout_url}")
+        return True
 
     except Exception as e:
-        return False, str(e)
+        print(f"[SMTP Error] Failed to send email: {e}")
+        return False
