@@ -1,8 +1,0 @@
-**/.env
-**/.env*
-*.pyc
-**/__pycache__/
-.pytest_cache/
-*.db
-*.sqlite3
-data/*.db
