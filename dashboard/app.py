@@ -1,502 +1,527 @@
-import os
+"""
+RazorRecover AI - Production Control Dashboard & Analytics Cockpit
+Enterprise revenue recovery cockpit with deterministic guardrails and interactive Plotly visuals.
+"""
+
 import sys
-import json
+import os
+
+# Ensure root directory is in module search path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import streamlit as st
 import pandas as pd
+import json
+import concurrent.futures
+from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
-import streamlit as st
 
-# Ensure root directory is accessible
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from app.agent.engine import process_recovery_pipeline
+from app.services.db_svc import init_db, save_recovery_record, get_all_records
+from app.services.webhook_svc import simulate_incoming_webhook
 from app.services.email_svc import send_recovery_email
-from app.services.db_svc import init_db, save_record, fetch_all_records
-from app.services.webhook_svc import verify_razorpay_signature, parse_webhook_payload
-
-init_db()
 
 st.set_page_config(
-    page_title="RazorRecover AI | Enterprise Dashboard",
+    page_title="RazorRecover AI - Enterprise Cockpit",
+    page_icon="⚡",
     layout="wide",
-    page_icon="⚡"
+    initial_sidebar_state="collapsed"
 )
 
-# -------------------------------------------------------------
-# RAZORPAY BLADE DESIGN SYSTEM & TYPOGRAPHY
-# -------------------------------------------------------------
+# Custom Razorpay Enterprise Theme, Fonts & Card Micro-Interactions
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Mulish:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap');
-
-    .stApp, .stMarkdown, p, h1, h2, h3, h4, h5, h6, label, span {
-        font-family: 'Mulish', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    /* Hide Streamlit default chrome */
+    #MainMenu, footer, header, .stDeployButton, div[data-testid="stDecoration"] {
+        display: none !important;
     }
 
-    [class*="material-symbols"], 
-    [class*="material-icons"],
-    [data-testid="stIconMaterial"],
-    .stIcon {
-        font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
-        font-feature-settings: "liga" 1 !important;
-    }
-
+    /* Modern Fintech Mesh Background */
     .stApp {
-        background-color: #F4F7FB !important;
-        background-image: 
-            radial-gradient(at 0% 0%, rgba(13, 148, 251, 0.08) 0px, transparent 50%),
-            radial-gradient(at 100% 0%, rgba(1, 38, 82, 0.06) 0px, transparent 50%),
-            radial-gradient(at 50% 100%, rgba(4, 219, 124, 0.04) 0px, transparent 50%) !important;
-        background-attachment: fixed !important;
+        background-color: #f8fafc;
+        background-image: radial-gradient(#e2e8f0 1px, transparent 1px);
+        background-size: 24px 24px;
     }
 
-    .rzp-hero {
-        background: linear-gradient(135deg, #012652 0%, #083b79 55%, #0D94FB 100%);
-        padding: 30px 36px;
+    /* Hero Header Container */
+    .hero-container {
+        background: linear-gradient(135deg, #0c2340 0%, #0369a1 100%);
+        padding: 24px 32px;
         border-radius: 16px;
-        color: #FFFFFF;
-        box-shadow: 0 16px 30px -10px rgba(13, 148, 251, 0.25);
-        margin-bottom: 24px;
-    }
-    .rzp-hero h1 {
-        color: #FFFFFF !important;
-        font-weight: 900 !important;
-        font-size: 2.1rem !important;
-        margin: 0 !important;
-    }
-    .rzp-hero p {
-        color: #D8E5F7 !important;
-        font-size: 1rem !important;
-        margin-top: 6px !important;
-        margin-bottom: 12px !important;
-    }
-    .rzp-tag {
-        display: inline-flex;
+        color: #ffffff;
+        margin-bottom: 20px;
+        box-shadow: 0 10px 25px -5px rgba(12, 35, 64, 0.25);
+        display: flex;
         align-items: center;
-        gap: 6px;
+        justify-content: space-between;
+    }
+    .hero-title {
+        font-size: 32px !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.03em;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: #ffffff;
+    }
+    .hero-subtitle {
+        font-size: 14px;
+        color: #bae6fd;
+        margin-top: 6px;
+        font-weight: 400;
+    }
+
+    /* Executive Status Pill */
+    .status-pill {
         background: rgba(255, 255, 255, 0.15);
+        border: 1px solid rgba(255, 255, 255, 0.3);
         backdrop-filter: blur(8px);
-        color: #FFFFFF !important;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 0.8rem;
-        font-weight: 700;
-        border: 1px solid rgba(255, 255, 255, 0.2);
+        padding: 8px 16px;
+        border-radius: 9999px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .pulse-dot {
+        width: 8px;
+        height: 8px;
+        background: #38bdf8;
+        border-radius: 50%;
+        box-shadow: 0 0 10px #38bdf8;
     }
 
-    .metric-card {
-        background: #FFFFFF;
-        border: 1px solid #E2E8F0;
-        padding: 20px;
+    /* Interactive Metric Cards */
+    div[data-testid="stMetric"] {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        padding: 20px 24px;
         border-radius: 14px;
-        box-shadow: 0 4px 12px rgba(1, 38, 82, 0.04);
-        transition: transform 0.22s ease, box-shadow 0.22s ease;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+        transition: all 0.25s ease-in-out;
     }
-    .metric-card:hover {
+    div[data-testid="stMetric"]:hover {
         transform: translateY(-4px);
-        border-color: #0D94FB;
-        box-shadow: 0 12px 24px -6px rgba(13, 148, 251, 0.16);
+        box-shadow: 0 12px 24px -4px rgba(2, 132, 199, 0.18);
+        border-color: #0284c7;
     }
-    .metric-label {
-        color: #64748B;
-        font-size: 0.78rem;
-        font-weight: 700;
-        text-transform: uppercase;
-    }
-    .metric-num {
-        color: #012652;
-        font-size: 1.75rem;
-        font-weight: 800;
-        margin: 4px 0;
-        font-family: 'JetBrains Mono', monospace !important;
-    }
-    .metric-footer {
-        font-size: 0.8rem;
-        font-weight: 700;
-    }
-    .text-green { color: #02A95C; }
-    .text-blue { color: #0D94FB; }
-    .text-purple { color: #5F259F; }
-
-    .stButton > button {
-        background: linear-gradient(180deg, #0D94FB 0%, #0274D9 100%) !important;
-        color: #FFFFFF !important;
-        border: none !important;
-        border-radius: 8px !important;
+    div[data-testid="stMetricLabel"] p {
+        font-size: 13px !important;
         font-weight: 700 !important;
-        font-size: 0.95rem !important;
-        padding: 10px 24px !important;
-        box-shadow: 0 4px 14px rgba(13, 148, 251, 0.3) !important;
+        color: #64748b !important;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    div[data-testid="stMetricValue"] div {
+        color: #0284c7 !important;
+        font-weight: 900 !important;
+        font-size: 32px !important;
+        letter-spacing: -0.02em;
     }
 
-    .whatsapp-container {
-        background: #ECE5DD;
-        border-radius: 14px;
-        padding: 16px;
-        border: 2px solid #CBD5E1;
-        max-width: 480px;
-        margin-top: 15px;
+    /* Guardrail Banner */
+    .guardrail-strip {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-left: 5px solid #0284c7;
+        padding: 12px 20px;
+        border-radius: 10px;
+        margin-bottom: 24px;
+        font-size: 13px;
+        color: #334155;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.02);
     }
-    .wa-bubble {
-        background: #FFFFFF;
-        padding: 12px 14px;
-        border-radius: 10px 10px 10px 0;
-        font-size: 0.9rem;
-        color: #1E293B;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-        line-height: 1.45;
+
+    /* Razorpay Primary Buttons */
+    div.stButton > button:first-child {
+        background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%) !important;
+        color: #ffffff !important;
+        border: none !important;
+        border-radius: 10px !important;
+        padding: 14px 28px !important;
+        font-size: 15px !important;
+        font-weight: 700 !important;
+        box-shadow: 0 4px 14px rgba(2, 132, 199, 0.3) !important;
+        transition: all 0.2s ease-in-out !important;
     }
-    .wa-meta {
-        font-size: 0.72rem;
-        color: #64748B;
-        text-align: right;
-        margin-top: 4px;
+    div.stButton > button:first-child:hover {
+        background: linear-gradient(135deg, #0369a1 0%, #0c4a6e 100%) !important;
+        box-shadow: 0 8px 20px rgba(2, 132, 199, 0.45) !important;
+        transform: translateY(-2px);
     }
-    .wa-cta-btn {
-        display: block;
-        text-align: center;
-        background: #02A95C;
-        color: #FFFFFF !important;
-        text-decoration: none;
-        padding: 9px 16px;
-        border-radius: 8px;
-        font-weight: 700;
-        font-size: 0.88rem;
-        margin-top: 10px;
+
+    /* Clean Tabs */
+    button[data-baseweb="tab"] {
+        font-size: 15px !important;
+        font-weight: 700 !important;
+        padding: 14px 22px !important;
+        color: #64748b !important;
+    }
+    button[aria-selected="true"] {
+        color: #0284c7 !important;
+        border-bottom: 3px solid #0284c7 !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
+# Initialize database schema
+init_db()
+
+# Premium Hero Banner
 st.markdown("""
-<div class="rzp-hero">
-    <h1>⚡ RazorRecover AI</h1>
-    <p>Autonomous Enterprise Revenue Recovery Engine with Deterministic Guardrails</p>
-    <div class="rzp-tag">🛡️ Razorpay AI Buildathon &nbsp;|&nbsp; Track 03: AI Revenue Recovery</div>
+<div class="hero-container">
+    <div>
+        <div class="hero-title">⚡ RazorRecover AI</div>
+        <div class="hero-subtitle">Enterprise Autonomous Revenue Recovery Engine for Razorpay Checkouts</div>
+    </div>
+    <div class="status-pill">
+        <span class="pulse-dot"></span> System Live & Guardrails Armed
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
-# Load Synthetic Batch Dataset
-try:
-    with open("data/synthetic_batch.json", "r") as f:
-        batch_data = json.load(f)
-except Exception:
-    try:
-        with open("../data/synthetic_batch.json", "r") as f:
-            batch_data = json.load(f)
-    except Exception:
-        st.error("Missing `data/synthetic_batch.json`.")
-        st.stop()
+# Active Guardrail Enforcement Strip
+st.markdown("""
+<div class="guardrail-strip">
+    🛡️ <strong>Active Financial Constraints:</strong> Max Margin Discount <code>10.0% (Cap: ₹500)</code> | Max Automated Retries <code>≤ 2</code> | Escalation Floor <code>≥ ₹25,000</code> | Hard Declines Blocked
+</div>
+""", unsafe_allow_html=True)
 
-tabs = st.tabs([
-    "📊 Batch Benchmark & Analytics (50 Scenarios)", 
-    "🧪 Live Scenario Sandbox & Resolution", 
-    "⚡ Razorpay Webhook Ingestion Simulator",
-    "📜 Immutable Audit Database"
+# Preset Scenarios
+PRESETS = {
+    "Select a Scenario Preset...": None,
+    "1. Cart Drop-off (Eligible for 5% Margin Incentive)": {
+        "record_id": "PRESET_DROPOFF_01",
+        "order_id": "order_cart_9921",
+        "customer_name": "Aditi Rao",
+        "customer_email": "aditi.rao@example.com",
+        "customer_tier": "standard",
+        "amount_inr": 3499.0,
+        "failure_type": "CHECKOUT_DROPOFF",
+        "error_code": "CUSTOMER_EXITED",
+        "retry_count": 0,
+        "opted_out": False
+    },
+    "2. High-Value Desk Escalation (Amount >= ₹25,000)": {
+        "record_id": "PRESET_ESC_02",
+        "order_id": "order_hival_4410",
+        "customer_name": "Rohan Enterprise Solutions",
+        "customer_email": "finance@rohanent.com",
+        "customer_tier": "standard",
+        "amount_inr": 48500.0,
+        "failure_type": "CHECKOUT_DROPOFF",
+        "error_code": "GATEWAY_TIMEOUT",
+        "retry_count": 0,
+        "opted_out": False
+    },
+    "3. Hard Decline (Card Blocked - Zero Outreach Rule)": {
+        "record_id": "PRESET_STOP_03",
+        "order_id": "order_decline_7712",
+        "customer_name": "Karthik Verma",
+        "customer_email": "karthik.v@example.com",
+        "customer_tier": "standard",
+        "amount_inr": 1800.0,
+        "failure_type": "PAYMENT_DEGRADATION",
+        "error_code": "CARD_BLOCKED",
+        "retry_count": 1,
+        "opted_out": False
+    },
+    "4. B2B Receivable Overdue (Enterprise Multi-Failure)": {
+        "record_id": "PRESET_B2B_04",
+        "order_id": "order_b2b_1088",
+        "customer_name": "Nexus Dynamics LLP",
+        "customer_email": "accounts@nexusdyn.com",
+        "customer_tier": "enterprise",
+        "amount_inr": 16500.0,
+        "failure_type": "OVERDUE_RECEIVABLES",
+        "error_code": "INVOICE_PAST_DUE",
+        "retry_count": 1,
+        "opted_out": False
+    }
+}
+
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 Batch Recovery Benchmark & Visual Analytics",
+    "🎯 Live Scenario & Sandbox Resolution",
+    "⚡ Webhook Ingestion Simulator",
+    "🗄️ Immutable Audit Database"
 ])
 
-# -------------------------------------------------------------
-# TAB 1: BATCH BENCHMARK & CHARTS
-# -------------------------------------------------------------
-with tabs[0]:
-    st.markdown("### 📈 Measured Money Recovered Across 50-Record Batch")
-    st.write("Autonomous recovery pipeline evaluating checkout drop-offs, payment degradations, mandate desyncs, and overdue B2B receivables.")
+# ---------------- TAB 1: BATCH BENCHMARK & CHARTS ----------------
+with tab1:
+    st.markdown("### High-Throughput Batch Processing Simulation")
+    st.write("Concurrently diagnoses and recovers 50 heterogeneous payment failures using deterministic algorithmic routing.")
 
-    if st.button("🚀 Run 50-Record Batch Benchmark"):
-        with st.spinner("Executing autonomous pipeline and persisting to SQLite database..."):
-            results = []
-            for item in batch_data:
-                res = process_recovery_pipeline(item)
-                save_record(res)
-                results.append(res)
-            st.session_state["batch_results"] = results
+    if st.button("🚀 Run Batch Recovery Benchmark (50 Records)", type="primary", use_container_width=True):
+        batch_records = []
+        failure_categories = [
+            ("CHECKOUT_DROPOFF", "CUSTOMER_ABANDONED", 2400.0, 0, "standard"),
+            ("PAYMENT_DEGRADATION", "GATEWAY_TIMEOUT", 1850.0, 1, "standard"),
+            ("PAYMENT_DEGRADATION", "CARD_BLOCKED", 4200.0, 0, "standard"),
+            ("SUBSCRIPTION_MANDATE_FAIL", "INSUFFICIENT_FUNDS", 999.0, 2, "standard"),
+            ("OVERDUE_RECEIVABLES", "PAYMENT_PENDING", 32000.0, 0, "enterprise"),
+        ]
 
-    if "batch_results" in st.session_state:
-        results = st.session_state["batch_results"]
-        
-        total_risk = sum(r["money_at_risk"] for r in results)
-        total_recovered = sum(r["money_recovered"] for r in results if r["status"] == "RECOVERED")
-        stopped_count = sum(1 for r in results if r["status"] == "STOPPED")
-        escalated_count = sum(1 for r in results if r["status"] == "ESCALATED_TO_HUMAN")
-        recovered_count = sum(1 for r in results if r["status"] == "RECOVERED")
-        recovery_rate = (recovered_count / len(results)) * 100 if len(results) > 0 else 0
+        for i in range(50):
+            cat = failure_categories[i % len(failure_categories)]
+            batch_records.append({
+                "record_id": f"BATCH_{i+1:03d}",
+                "order_id": f"order_batch_{1000 + i}",
+                "customer_name": f"Merchant Customer #{i+1}",
+                "customer_email": f"customer_{i+1}@example.com",
+                "customer_tier": cat[4],
+                "amount_inr": cat[2] + (i * 50.0),
+                "failure_type": cat[0],
+                "error_code": cat[1],
+                "retry_count": cat[3],
+                "opted_out": (i == 48)
+            })
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(process_recovery_pipeline, batch_records))
+
+        for r in results:
+            save_recovery_record(r)
+
+        df = pd.DataFrame(results)
+        recovered_df = df[df["status"] == "RECOVERED"]
+        escalated_df = df[df["status"] == "ESCALATED_TO_HUMAN"]
+        stopped_df = df[df["status"] == "STOPPED"]
+
+        total_risk = df["money_at_risk"].sum()
+        total_rec = df["money_recovered"].sum()
 
         col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">Total Revenue at Risk</div>
-                <div class="metric-num">₹{total_risk:,.2f}</div>
-                <div class="metric-footer text-blue">● 50 Scenarios Analyzed</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with col2:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">Total Net Recovered</div>
-                <div class="metric-num text-green">₹{total_recovered:,.2f}</div>
-                <div class="metric-footer text-green">↑ {recovery_rate:.1f}% Win Rate</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with col3:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">Stopping Rules Triggered</div>
-                <div class="metric-num text-purple">{stopped_count}</div>
-                <div class="metric-footer text-purple">✓ Zero Hallucinations</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with col4:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">Compliant Escalations</div>
-                <div class="metric-num">{escalated_count}</div>
-                <div class="metric-footer text-blue">👤 Human Review Queue</div>
-            </div>
-            """, unsafe_allow_html=True)
+        col1.metric("Total Money at Risk", f"₹{total_risk:,.2f}")
+        col2.metric("Money Recovered", f"₹{total_rec:,.2f}", delta=f"{(total_rec/total_risk)*100:.1f}% Salvaged")
+        col3.metric("Auto-Recovered", f"{len(recovered_df)} records")
+        col4.metric("Escalated / Stopped", f"{len(escalated_df)} / {len(stopped_df)} records")
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        df_plot = pd.DataFrame(results)
-        c1, c2 = st.columns(2)
+        chart_col1, chart_col2 = st.columns(2)
 
-        with c1:
-            fig_status = px.pie(
-                df_plot, 
-                names="status", 
-                title="<b>Intervention Outcome Distribution</b>",
-                color="status",
-                color_discrete_map={
-                    "RECOVERED": "#02A95C",
-                    "STOPPED": "#E53E3E",
-                    "ESCALATED_TO_HUMAN": "#0D94FB"
-                },
-                hole=0.45
-            )
-            fig_status.update_layout(margin=dict(t=40, b=10, l=10, r=10), height=320)
-            st.plotly_chart(fig_status, use_container_width=True)
-
-        with c2:
-            df_plot["Failure Type"] = [b.get("failure_type", "OTHER") for b in batch_data]
-            rec_by_type = df_plot.groupby("Failure Type")[["money_at_risk", "money_recovered"]].sum().reset_index()
+        with chart_col1:
+            st.markdown("#### 🍩 Pipeline Resolution Breakdown")
+            status_counts = df["status"].value_counts().reset_index()
+            status_counts.columns = ["Status", "Count"]
             
-            fig_bar = go.Figure(data=[
-                go.Bar(name='Revenue at Risk', x=rec_by_type['Failure Type'], y=rec_by_type['money_at_risk'], marker_color='#CBD5E1'),
-                go.Bar(name='Recovered Revenue', x=rec_by_type['Failure Type'], y=rec_by_type['money_recovered'], marker_color='#02A95C')
-            ])
+            fig_donut = px.pie(
+                status_counts,
+                values="Count",
+                names="Status",
+                hole=0.6,
+                color="Status",
+                color_discrete_map={
+                    "RECOVERED": "#0284c7",
+                    "ESCALATED_TO_HUMAN": "#f59e0b",
+                    "STOPPED": "#ef4444"
+                }
+            )
+            fig_donut.update_traces(
+                textposition="inside",
+                textinfo="percent+label",
+                marker=dict(line=dict(color="#ffffff", width=2))
+            )
+            fig_donut.update_layout(
+                margin=dict(t=10, b=10, l=10, r=10),
+                height=320,
+                showlegend=False,
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)"
+            )
+            st.plotly_chart(fig_donut, use_container_width=True)
+
+        with chart_col2:
+            st.markdown("#### 📊 Value at Risk vs. Recovered by Vector")
+            vector_agg = df.groupby("failure_type")[["money_at_risk", "money_recovered"]].sum().reset_index()
+            
+            fig_bar = go.Figure()
+            fig_bar.add_trace(go.Bar(
+                x=vector_agg["failure_type"],
+                y=vector_agg["money_at_risk"],
+                name="At Risk",
+                marker_color="#94a3b8"
+            ))
+            fig_bar.add_trace(go.Bar(
+                x=vector_agg["failure_type"],
+                y=vector_agg["money_recovered"],
+                name="Recovered",
+                marker_color="#0284c7"
+            ))
             fig_bar.update_layout(
-                barmode='group',
-                title="<b>₹ Revenue at Risk vs. Recovered by Channel</b>",
-                margin=dict(t=40, b=10, l=10, r=10),
-                height=320
+                barmode="group",
+                margin=dict(t=10, b=10, l=10, r=10),
+                height=320,
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                yaxis=dict(showgrid=True, gridcolor="#e2e8f0")
             )
             st.plotly_chart(fig_bar, use_container_width=True)
 
-        df_summary = pd.DataFrame([
-            {
-                "Record ID": r["record_id"],
-                "Status": r["status"],
-                "Original ₹": f"₹{r['money_at_risk']:,.2f}",
-                "Recovered ₹": f"₹{r['money_recovered']:,.2f}",
-                "Decision / Action Reason": r["reason"]
-            }
-            for r in results
-        ])
-        st.dataframe(df_summary, use_container_width=True)
+        st.markdown("#### 📋 Batch Transaction Ledger")
+        st.dataframe(
+            df[["record_id", "order_id", "failure_type", "money_at_risk", "money_recovered", "status", "reason"]],
+            use_container_width=True
+        )
 
-# -------------------------------------------------------------
-# TAB 2: LIVE SCENARIO SANDBOX & AUTO-SELECTION
-# -------------------------------------------------------------
-with tabs[1]:
-    st.markdown("### 🧪 Live Scenario Sandbox & Auto-Dispatched Resolution")
-    st.write("Pick any preset scenario from the batch dataset to auto-fill details, or customize values to test real-time interventions.")
+# ---------------- TAB 2: LIVE SCENARIO TRIGGER & MODAL ----------------
+with tab2:
+    st.markdown("### Manual Event Trigger & Sandbox Resolution")
+    st.write("Test individual payment failures against the deterministic guardrail matrix.")
 
-    scenario_options = ["-- Custom Entry --"] + [
-        f"{b['record_id']} | {b['customer_name']} (₹{b['amount_inr']:,.2f}) - {b['failure_type']}"
-        for b in batch_data
-    ]
-    selected_scenario = st.selectbox("⚡ Quick Load Scenario Preset:", scenario_options)
+    selected_preset_name = st.selectbox("⚡ Quick Load Scenario Preset", list(PRESETS.keys()))
+    preset = PRESETS.get(selected_preset_name)
 
-    # Defaults
-    def_order_id = "order_live_9901"
-    def_name = "Ananya Sharma"
-    def_email = "yourname@example.com"
-    def_amt = 3200.0
-    def_failure = "CHECKOUT_DROPOFF"
-    def_err = "AUTH_STEP_ABANDONED"
-    def_retries = 0
-    def_tier = "standard"
+    with st.form("manual_recovery_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            order_id = st.text_input("Order ID", value=preset.get("order_id", "order_live_101") if preset else "order_live_101")
+            customer_name = st.text_input("Customer Name", value=preset.get("customer_name", "Sri Lakshmi") if preset else "Sri Lakshmi")
+            customer_email = st.text_input("Customer Email", value=preset.get("customer_email", "customer@example.com") if preset else "customer@example.com")
+            customer_tier = st.selectbox("Customer Tier", ["standard", "enterprise"], index=1 if preset and preset.get("customer_tier") == "enterprise" else 0)
 
-    if selected_scenario != "-- Custom Entry --":
-        sel_id = selected_scenario.split(" | ")[0]
-        sel_item = next((item for item in batch_data if item["record_id"] == sel_id), None)
-        if sel_item:
-            def_order_id = sel_item.get("order_id", def_order_id)
-            def_name = sel_item.get("customer_name", def_name)
-            def_email = sel_item.get("customer_email", def_email)
-            def_amt = float(sel_item.get("amount_inr", def_amt))
-            def_failure = sel_item.get("failure_type", def_failure)
-            def_err = sel_item.get("error_code", def_err)
-            def_retries = int(sel_item.get("retry_count", 0))
-            def_tier = sel_item.get("customer_tier", "standard")
+        with col2:
+            amount_inr = st.number_input("Amount (₹)", min_value=0.0, value=float(preset.get("amount_inr", 2500.0)) if preset else 2500.0, step=100.0)
+            failure_type = st.selectbox("Failure Vector", ["CHECKOUT_DROPOFF", "PAYMENT_DEGRADATION", "SUBSCRIPTION_MANDATE_FAIL", "OVERDUE_RECEIVABLES"], index=0)
+            error_code = st.text_input("Error Code", value=preset.get("error_code", "PAYMENT_TIMEOUT") if preset else "PAYMENT_TIMEOUT")
+            retry_count = st.number_input("Retry Count", min_value=0, max_value=10, value=int(preset.get("retry_count", 0)) if preset else 0)
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        order_id = st.text_input("Order ID", def_order_id)
-        cust_name = st.text_input("Customer Name", def_name)
-        cust_email = st.text_input("Customer Email (Enter your real email to test auto-dispatch)", def_email)
-        amount = st.number_input("Amount (INR)", min_value=100.0, max_value=100000.0, value=def_amt, step=100.0)
+        send_real_email = st.checkbox("📧 Dispatch Real Recovery Email via SMTP")
+        submit_btn = st.form_submit_button("⚡ Trigger Autonomous Recovery Agent", type="primary", use_container_width=True)
 
-    with col_b:
-        failure_opts = ["CHECKOUT_DROPOFF", "PAYMENT_DEGRADATION", "SUBSCRIPTION_MANDATE_FAIL", "B2B_RECEIVABLE_OVERDUE", "HARD_DECLINE"]
-        failure_idx = failure_opts.index(def_failure) if def_failure in failure_opts else 0
-        failure_type = st.selectbox("Failure Vector", failure_opts, index=failure_idx)
+    @st.dialog("⚡ RazorRecover Action Report")
+    def show_resolution_modal(res, email_dispatched):
+        st.markdown(f"### Status: **{res['status']}**")
+        st.write(f"**Reason:** {res['reason']}")
+        
+        if res["status"] == "RECOVERED":
+            st.success("Recovery Strategy Approved & Official Payment Link Generated.")
+            st.info(f"**Dispatched Outreach:**\n\n{res['message']}")
+            if res.get("payment_link"):
+                st.link_button("💳 Open Secure Razorpay Checkout", res["payment_link"], use_container_width=True)
+            if email_dispatched:
+                st.caption("✅ Live SMTP notification dispatched to customer.")
+        elif res["status"] == "ESCALATED_TO_HUMAN":
+            st.warning("⚠️ Margin / Enterprise Floor Exceeded. Escalated to Account Desk.")
+        else:
+            st.error("🛑 Stopping Rule Enforced (Hard Decline / Retry Limit Hit).")
 
-        err_opts = ["AUTH_STEP_ABANDONED", "GATEWAY_TIMEOUT", "UPI_NPCI_UNAVAILABLE", "MANDATE_EXECUTION_FAILED", "INVOICE_OVERDUE_15D", "INSUFFICIENT_FUNDS", "CARD_BLOCKED"]
-        err_idx = err_opts.index(def_err) if def_err in err_opts else 0
-        error_code = st.selectbox("Error Code", err_opts, index=err_idx)
-
-        retries = st.slider("Previous Retry Attempts", 0, 4, def_retries)
-        tier_opts = ["standard", "enterprise"]
-        tier_idx = tier_opts.index(def_tier) if def_tier in tier_opts else 0
-        customer_tier = st.selectbox("Account Tier", tier_opts, index=tier_idx)
-
-    if st.button("⚡ Trigger Autonomous Recovery Agent"):
-        payload = {
-            "record_id": f"REC_LIVE_{order_id[-4:]}",
-            "order_id": order_id,
-            "customer_name": cust_name,
-            "customer_email": cust_email,
-            "failure_type": failure_type,
-            "error_code": error_code,
-            "amount_inr": amount,
-            "retry_count": retries,
-            "customer_tier": customer_tier
-        }
-        res = process_recovery_pipeline(payload)
-        save_record(res)
-        st.session_state["live_sim_result"] = res
-        st.session_state["payment_completed"] = False
-
-        if "@" in cust_email and res.get("payment_link"):
-            with st.spinner(f"Auto-dispatching recovery email to {cust_email}..."):
-                ok, msg = send_recovery_email(
-                    to_email=cust_email,
-                    customer_name=cust_name,
-                    recovery_message=res['message'],
-                    payment_link=res['payment_link'],
-                    amount_inr=res['money_recovered']
-                )
-                if ok:
-                    st.toast(f"📧 Recovery Email Auto-Dispatched to {cust_email}!", icon="⚡")
-                else:
-                    st.warning(f"Email Dispatch Info: {msg}")
-
-    if "live_sim_result" in st.session_state:
-        res = st.session_state["live_sim_result"]
-        status_color = "#02A95C" if res["status"] == "RECOVERED" else ("#0D94FB" if res["status"] == "ESCALATED_TO_HUMAN" else "#E53E3E")
-
-        st.markdown(f"""
-        <div style="background: #FFFFFF; border-left: 6px solid {status_color}; padding: 18px 22px; border-radius: 12px; margin-top: 15px; box-shadow: 0 4px 14px rgba(1, 38, 82, 0.04);">
-            <h4 style="margin: 0; color: {status_color}; font-weight: 800;">Pipeline Status: {res['status']}</h4>
-            <p style="margin: 6px 0 0 0; color: #334155;"><strong>Reason:</strong> {res['reason']}</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        if res["payment_link"]:
-            col_preview, col_action = st.columns([1.1, 0.9])
-            
-            with col_preview:
-                st.markdown("#### 📱 Simulated WhatsApp / SMS Preview")
-                st.markdown(f"""
-                <div class="whatsapp-container">
-                    <div style="font-size: 0.8rem; font-weight: 700; color: #075E54; margin-bottom: 8px;">💬 Razorpay Verified Account</div>
-                    <div class="wa-bubble">
-                        {res['message']}
-                        <div class="wa-meta">Just now ✓✓</div>
-                    </div>
-                    <a href="{res['payment_link']}" target="_blank" class="wa-cta-btn">💳 Open Razorpay Checkout Portal</a>
-                </div>
-                """, unsafe_allow_html=True)
-
-            with col_action:
-                st.markdown("#### 🔄 Live Resolution State")
-                st.info(f"📧 Notification sent automatically to **{cust_email}**.")
-                
-                if not st.session_state.get("payment_completed", False):
-                    if st.button("✅ Simulate Customer Paid (Razorpay Callback)"):
-                        st.session_state["payment_completed"] = True
-                        st.rerun()
-                else:
-                    st.success(f"🎉 **Payment Captured!** ₹{res['money_recovered']:,.2f} settled into merchant account.")
-                    st.balloons()
-
-        st.markdown("#### 🔍 Agent Execution Trace:")
+        st.markdown("**Deterministic Audit Trail:**")
         st.json(res["audit_trail"])
 
-# -------------------------------------------------------------
-# TAB 3: RAZORPAY WEBHOOK SIMULATOR
-# -------------------------------------------------------------
-with tabs[2]:
-    st.markdown("### ⚡ Razorpay Webhook Ingestion Simulator")
-    st.write("Demonstrates real-time HMAC-SHA256 signature verification and automated ingestion of Razorpay `payment.failed` event payloads.")
+    if submit_btn:
+        payload = {
+            "record_id": f"MANUAL_{datetime.now().strftime('%H%M%S')}",
+            "order_id": order_id,
+            "customer_name": customer_name,
+            "customer_email": customer_email,
+            "customer_tier": customer_tier,
+            "amount_inr": amount_inr,
+            "failure_type": failure_type,
+            "error_code": error_code,
+            "retry_count": retry_count,
+            "opted_out": False
+        }
 
-    sample_webhook = {
+        result = process_recovery_pipeline(payload)
+        save_recovery_record(result)
+
+        email_ok = False
+        if send_real_email and customer_email and result["status"] == "RECOVERED":
+            email_ok = send_recovery_email(customer_email, customer_name, order_id, result.get("payment_link", ""), result["message"])
+
+        show_resolution_modal(result, email_ok)
+
+# ---------------- TAB 3: WEBHOOK SIMULATOR ----------------
+with tab3:
+    st.markdown("### Razorpay Webhook Ingestion & HMAC Verification")
+    st.write("Validates incoming `payment.failed` payloads using SHA-256 HMAC signature validation.")
+
+    sample_webhook_payload = {
         "event": "payment.failed",
-        "account_id": "acc_razorpay_live_01",
+        "account_id": "acc_razorrecover_live",
+        "contains": ["payment"],
         "payload": {
             "payment": {
                 "entity": {
-                    "id": "pay_LIVE_9021882",
-                    "order_id": "order_wh_8829",
-                    "amount": 480000,
+                    "id": "pay_test_998124",
+                    "order_id": "order_hook_7721",
+                    "amount": 450000,
                     "currency": "INR",
                     "status": "failed",
-                    "method": "upi",
-                    "error_code": "GATEWAY_TIMEOUT",
-                    "error_description": "Payment was declined by issuing bank due to network timeout.",
-                    "email": "rohit.sharma@example.com",
-                    "contact": "+919876543210",
+                    "error_code": "BAD_REQUEST_ERROR",
+                    "error_description": "Payment failed due to bank timeout",
                     "notes": {
-                        "customer_name": "Rohit Sharma",
-                        "retry_count": 0,
-                        "tier": "standard"
+                        "customer_name": "Vikram Malhotra",
+                        "customer_email": "vikram@example.com"
                     }
                 }
             }
         }
     }
 
-    webhook_text = st.text_area("Simulated Razorpay Webhook Payload (JSON):", value=json.dumps(sample_webhook, indent=2), height=240)
+    st.json(sample_webhook_payload)
 
-    if st.button("📥 Ingest & Process Webhook"):
-        try:
-            parsed_json = json.loads(webhook_text)
-            extracted = parse_webhook_payload(parsed_json)
-            st.success("✅ **HMAC-SHA256 Signature Verified** &bull; Webhook payload accepted into recovery queue.")
-            
-            with st.spinner("Processing recovery pipeline for webhook event..."):
-                res = process_recovery_pipeline(extracted)
-                save_record(res)
-                
-                st.markdown(f"""
-                <div style="background: #FFFFFF; border-left: 6px solid #02A95C; padding: 16px; border-radius: 10px; margin-top: 10px;">
-                    <h4 style="margin: 0; color: #02A95C;">Webhook Action: {res['status']}</h4>
-                    <p style="margin: 4px 0 0 0; color: #334155;">Generated Intervention: {res['reason']}</p>
-                </div>
-                """, unsafe_allow_html=True)
-                st.json(res)
-        except Exception as e:
-            st.error(f"Failed to parse webhook JSON: {e}")
+    if st.button("📥 Ingest & Process Webhook (HMAC-SHA256)", type="primary"):
+        sim_res = simulate_incoming_webhook(sample_webhook_payload)
+        
+        if sim_res.get("signature_verified"):
+            st.success(f"HMAC Signature Verified: `{sim_res.get('signature_sample')}`")
+            rec_result = sim_res.get("recovery_result", {})
+            save_recovery_record(rec_result)
 
-# -------------------------------------------------------------
-# TAB 4: IMMUTABLE AUDIT DATABASE
-# -------------------------------------------------------------
-with tabs[3]:
-    st.markdown("### 📜 Immutable Audit Database (SQLite Engine)")
-    st.write("Durable, compliant transaction log stored directly in local database.")
-    
-    db_records = fetch_all_records()
-    if db_records:
-        df_db = pd.DataFrame(db_records)
-        st.dataframe(df_db[["record_id", "order_id", "customer_name", "status", "amount_inr", "money_recovered", "timestamp"]], use_container_width=True)
+            st.write(f"**Pipeline Action:** {rec_result.get('status')} ({rec_result.get('reason')})")
+            if rec_result.get("payment_link"):
+                st.link_button("🔗 Open Webhook-Generated Payment Link", rec_result.get("payment_link"))
+        else:
+            st.error("HMAC Signature Verification Failed!")
+
+# ---------------- TAB 4: IMMUTABLE AUDIT DATABASE ----------------
+with tab4:
+    st.markdown("### Immutable Transaction Audit Log")
+    st.write("Regulatory compliance view with real-time text query filtering.")
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        search_query = st.text_input("🔍 Search Database (Order ID, Customer Name, or Status):", placeholder="e.g. order_live_101, RECOVERED, ESCALATED")
+    with col2:
+        st.write("")
+        st.write("")
+        refresh_btn = st.button("🔄 Refresh Database", use_container_width=True)
+
+    records = get_all_records()
+    if records:
+        db_df = pd.DataFrame(records)
+        
+        if search_query.strip():
+            q = search_query.strip().lower()
+            db_df = db_df[
+                db_df["order_id"].astype(str).str.lower().str.contains(q) |
+                db_df["customer_name"].astype(str).str.lower().str.contains(q) |
+                db_df["status"].astype(str).str.lower().str.contains(q) |
+                db_df["failure_type"].astype(str).str.lower().str.contains(q)
+            ]
+
+        st.dataframe(
+            db_df[["id", "order_id", "customer_name", "failure_type", "amount_inr", "money_recovered", "status", "created_at"]],
+            use_container_width=True
+        )
+
+        with st.expander("🔍 View Raw JSON Audit Trails"):
+            for rec in records[:10]:
+                st.markdown(f"**Order:** `{rec.get('order_id')}` | **Customer:** `{rec.get('customer_name')}` | **Status:** `{rec.get('status')}`")
+                try:
+                    trail = json.loads(rec.get("audit_trail", "[]"))
+                    st.json(trail)
+                except Exception:
+                    st.write(rec.get("audit_trail"))
+                st.divider()
     else:
-        st.info("No records in database yet. Run the benchmark or sandbox to populate records.")
+        st.info("No records in audit store. Trigger a batch benchmark or live scenario to generate logs.")
