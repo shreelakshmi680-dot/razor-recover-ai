@@ -1,109 +1,113 @@
-from typing import Dict, Any
-from datetime import datetime
+"""
+RazorRecover AI - Autonomous Decision Engine
+Orchestrates diagnosis, guardrails, link creation, and message generation.
+"""
+
 from app.agent.guardrails import (
     evaluate_stopping_rules,
     evaluate_escalation_rules,
-    apply_discount_guardrail
+    validate_discount_margin
 )
-from app.services.razorpay_svc import create_recovery_payment_link
+from app.services.checkout_page import generate_interactive_checkout_url
 
-def diagnose_root_cause(record: Dict[str, Any]) -> Dict[str, Any]:
-    ftype = record.get("failure_type", "GENERIC")
+def process_recovery_pipeline(payload: dict) -> dict:
+    record_id = payload.get("record_id", "REC_UNKNOWN")
+    order_id = payload.get("order_id", "order_live_000")
+    customer_name = payload.get("customer_name", "Valued Customer")
+    amount = float(payload.get("amount_inr", 0.0))
+    failure_type = payload.get("failure_type", "CHECKOUT_DROPOFF")
+    error_code = payload.get("error_code", "GENERIC_ERROR")
 
-    if ftype == "HARD_DECLINE":
-        return {"category": "UNRECOVERABLE_DECLINE", "action": "HALT", "discount": 0.0, "msg_type": "NONE"}
-    elif ftype == "PAYMENT_DEGRADATION":
-        return {"category": "TECHNICAL_LATENCY", "action": "SWITCH_TO_UPI_OR_RETRY", "discount": 0.0, "msg_type": "HINGLISH_STATUS"}
-    elif ftype == "CHECKOUT_DROPOFF":
-        return {"category": "PRICE_OR_FRICTION", "action": "DYNAMIC_DISCOUNT_NUDGE", "discount": 5.0, "msg_type": "HINGLISH_CART"}
-    elif ftype == "SUBSCRIPTION_MANDATE_FAIL":
-        return {"category": "MANDATE_DESYNC", "action": "DIRECT_RENEWAL_LINK", "discount": 0.0, "msg_type": "MANDATE_RECOVERY"}
-    elif ftype == "B2B_RECEIVABLE_OVERDUE":
-        return {"category": "OVERDUE_INVOICE", "action": "PROMISE_TO_PAY_LINK", "discount": 0.0, "msg_type": "B2B_REMINDER"}
-    
-    return {"category": "GENERIC", "action": "PAYMENT_LINK", "discount": 0.0, "msg_type": "STANDARD"}
-
-def generate_contextual_message(msg_type: str, customer_name: str, amount: float, link: str) -> str:
-    if msg_type == "HINGLISH_CART":
-        return f"Hey {customer_name}! Aapka cart hold pe hai with an exclusive discount. Complete payment safely: {link}"
-    elif msg_type == "HINGLISH_STATUS":
-        return f"Hi {customer_name}, bank servers me temporary issue tha. Click to retry directly via UPI/Card: {link}"
-    elif msg_type == "B2B_REMINDER":
-        return f"Dear {customer_name}, your invoice of ₹{amount:,.2f} is pending clearance. Secure settlement portal: {link}"
-    return f"Hello {customer_name}, please complete your pending payment of ₹{amount:,.2f} here: {link}"
-
-def process_recovery_pipeline(record: Dict[str, Any]) -> Dict[str, Any]:
     audit_trail = []
-    
-    # 1. Stopping Rules Check
-    should_stop, stop_reason = evaluate_stopping_rules(
-        record.get("error_code", "UNKNOWN"), 
-        record.get("retry_count", 0), 
-        record.get("opt_out", False)
-    )
-    if should_stop:
-        audit_trail.append({"step": "STOPPING_RULE", "status": "TERMINATED", "reason": stop_reason})
+
+    # 1. Stopping Rules Evaluation
+    stop_check = evaluate_stopping_rules(payload)
+    audit_trail.append({
+        "step": "STOPPING_RULE",
+        "status": "TERMINATED" if stop_check["stop"] else "PASSED",
+        "reason": stop_check["reason"]
+    })
+
+    if stop_check["stop"]:
         return {
-            "record_id": record["record_id"],
+            "record_id": record_id,
+            "order_id": order_id,
+            "customer_name": customer_name,
+            "failure_type": failure_type,
+            "money_at_risk": amount,
+            "money_recovered": 0.0,
             "status": "STOPPED",
-            "money_at_risk": record["amount_inr"],
-            "money_recovered": 0.0,
-            "reason": stop_reason,
-            "payment_link": None,
-            "message": None,
+            "reason": stop_check["reason"],
+            "message": "",
+            "payment_link": "",
             "audit_trail": audit_trail
         }
 
-    # 2. Compliant Escalation Check
-    should_escalate, escalation_reason = evaluate_escalation_rules(
-        record["amount_inr"], 
-        record.get("retry_count", 0), 
-        record.get("customer_tier", "standard")
-    )
-    if should_escalate:
-        audit_trail.append({"step": "ESCALATION_GATE", "status": "ESCALATED", "reason": escalation_reason})
+    # 2. Escalation Gate Evaluation
+    esc_check = evaluate_escalation_rules(payload)
+    audit_trail.append({
+        "step": "ESCALATION_GATE",
+        "status": "ESCALATED" if esc_check["escalate"] else "PASSED",
+        "reason": esc_check["reason"]
+    })
+
+    if esc_check["escalate"]:
         return {
-            "record_id": record["record_id"],
-            "status": "ESCALATED_TO_HUMAN",
-            "money_at_risk": record["amount_inr"],
+            "record_id": record_id,
+            "order_id": order_id,
+            "customer_name": customer_name,
+            "failure_type": failure_type,
+            "money_at_risk": amount,
             "money_recovered": 0.0,
-            "reason": escalation_reason,
-            "payment_link": None,
-            "message": None,
+            "status": "ESCALATED_TO_HUMAN",
+            "reason": esc_check["reason"],
+            "message": "",
+            "payment_link": "",
             "audit_trail": audit_trail
         }
 
-    # 3. Diagnosis Step
-    diagnosis = diagnose_root_cause(record)
-    audit_trail.append({"step": "DIAGNOSIS", "status": "SUCCESS", "details": diagnosis})
+    # 3. Diagnosis & Guardrail Margin Check
+    requested_discount = 5.0 if failure_type == "CHECKOUT_DROPOFF" else 0.0
+    approved_pct, discount_amount, note = validate_discount_margin(amount, requested_discount)
+    final_amount = max(0.0, amount - discount_amount)
 
-    # 4. Bounded Discount Guardrail
-    discount_pct, final_amount, notes = apply_discount_guardrail(
-        record["amount_inr"], 
-        diagnosis["discount"]
-    )
-    audit_trail.append({"step": "GUARDRAIL_CHECK", "status": "PASSED", "notes": notes, "final_amount": final_amount})
+    audit_trail.append({
+        "step": "GUARDRAIL_CHECK",
+        "status": "PASSED",
+        "notes": note,
+        "discount_applied_pct": approved_pct,
+        "discount_inr": discount_amount,
+        "final_amount": final_amount
+    })
 
-    # 5. Dynamic Link Generation
-    link = create_recovery_payment_link(
-        order_id=record["order_id"],
-        amount_inr=final_amount,
-        customer_email=record.get("customer_email", "guest@example.com"),
-        customer_phone=record.get("customer_phone"),
-        description=f"Recovery for {record['order_id']}"
-    )
-    audit_trail.append({"step": "PAYMENT_LINK_GENERATION", "status": "SUCCESS", "url": link})
+    # 4. Interactive Razorpay Link Generation
+    payment_link = generate_interactive_checkout_url(order_id, final_amount, customer_name)
+    audit_trail.append({
+        "step": "PAYMENT_LINK_GENERATION",
+        "status": "SUCCESS",
+        "url": payment_link
+    })
 
-    # 6. Contextual Communication Synthesis
-    msg = generate_contextual_message(diagnosis["msg_type"], record.get("customer_name", "Customer"), final_amount, link)
+    # 5. Clean Outreach Messaging (Clean Text for Email/SMS)
+    if failure_type == "CHECKOUT_DROPOFF":
+        msg = f"Namaste {customer_name}, your order #{order_id} was left in your cart. We've unlocked an exclusive {approved_pct:.0f}% recovery discount for you! Please complete your checkout below."
+    elif failure_type == "PAYMENT_DEGRADATION":
+        msg = f"Namaste {customer_name}, your recent payment experienced a network timeout. No double-debits occurred. You can safely complete your transaction below."
+    elif failure_type == "SUBSCRIPTION_MANDATE_FAIL":
+        msg = f"Namaste {customer_name}, your recurring mandate sync encountered a temporary bank delay. Please update your payment method below to prevent interruption."
+    else:
+        msg = f"Namaste {customer_name}, please complete your pending payment of ₹{final_amount:,.2f} safely using the link below."
 
     return {
-        "record_id": record["record_id"],
-        "status": "RECOVERED",
-        "money_at_risk": record["amount_inr"],
+        "record_id": record_id,
+        "order_id": order_id,
+        "customer_name": customer_name,
+        "failure_type": failure_type,
+        "money_at_risk": amount,
         "money_recovered": final_amount,
-        "reason": f"Autonomous action executed: {diagnosis['action']}",
-        "payment_link": link,
+        "status": "RECOVERED",
+        "reason": f"Autonomous recovery executed with {approved_pct:.1f}% discount margin.",
         "message": msg,
+        "payment_link": payment_link,
         "audit_trail": audit_trail
     }
